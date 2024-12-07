@@ -69,19 +69,23 @@ def get_derivative(data):
     return derivative 
 
 def get_imu_in_body(imu_data, rpy):
-    ENU_angles = np.zeros((len(imu_data[0]),4))
-    ENU_rot_vel = np.zeros((len(imu_data[0]),4))
-    ENU_angles[:,0] = imu_data[0]
-    ENU_rot_vel[:,0] = imu_data[0]
-    rot_body_to_imu = Rotation.from_euler('xyz', rpy) # bno055 0, 0, -np.pi/2 xsense: np.pi, 0.0, -0.5*np.pi
-    rot_imu_to_body = rot_body_to_imu.inv()
+    ENU_angles = np.zeros((len(imu_data[:,0]),4))
+    ENU_rot_vel = np.zeros((len(imu_data[:,0]),4))
+    ENU_angles[:,0] = imu_data[:,0]
+    ENU_rot_vel[:,0] = imu_data[:,0]
+    rot_imu_to_body = Rotation.from_euler('xyz', rpy) # bno055 0, 0, -np.pi/2 xsense: np.pi, 0.0, -0.5*np.pi
+    # rot_imu_to_body = rot_body_to_imu.inv()
 
-    quats = np.array([np.array(imu_data[1]).T,np.array(imu_data[2]).T,np.array(imu_data[3]).T,np.array(imu_data[4]).T]).T
+    # quats = np.array([np.array(imu_data[1]).T,np.array(imu_data[2]).T,np.array(imu_data[3]).T,np.array(imu_data[4]).T]).T
+    quats = np.array([imu_data[:,1], imu_data[:,2], imu_data[:,3], imu_data[:,4]]).T
     imu_absolute_orientation = Rotation.from_quat(quats)
     rot_enu_to_body = imu_absolute_orientation * rot_imu_to_body
-    rot_body_to_enu = rot_enu_to_body.inv()
-    ENU_angles[:,1:] = rot_body_to_enu.as_euler('xyz')
-    rot_vel = np.array([imu_data[5], imu_data[6], imu_data[7]]).T
+    # rot_body_to_enu = rot_enu_to_body.inv()
+    
+    # ENU_angles[:,1:] = (imu_absolute_orientation * rot_imu_to_body).as_euler('xyz')
+    ENU_angles[:,1:] = rot_enu_to_body.as_euler('xyz')
+
+    rot_vel = np.array([imu_data[:,5], imu_data[:,6], imu_data[:,7]]).T
     ENU_rot_vel[:,1:] = rot_imu_to_body.apply(np.squeeze(rot_vel)) 
 
     return ENU_angles, ENU_rot_vel
@@ -135,8 +139,8 @@ def convert_enu_to_body(imu_data, gps_pos, gps_vel, rpy_imu):
     # print(imu_data[100,0])
 
     trans_body_to_gps = np.array([-0.145, 0.015, 0.16])
-    rot_body_to_imu = Rotation.from_euler('xyz', rpy_imu)
-    rot_imu_to_body = rot_body_to_imu.inv()
+    rot_imu_to_body = Rotation.from_euler('xyz', rpy_imu)
+    # rot_imu_to_body = rot_body_to_imu.inv()
     r_gps_body = trans_body_to_gps
 
     # print(gps_vel[0][0+start])
@@ -773,7 +777,8 @@ def read_all_data_to_var(file_path,rpy_IMU):
     # IMU               1                   2                   3                   4                       5                          6                         7
     measurement = [['orientation','x'],['orientation','y'],['orientation','z'],['orientation','w'],['angular_velocity','x'],['angular_velocity','y'],['angular_velocity','z']]
     imu_data = read_in_mcap(file_path, measurement, ["/alpine_amanita/bno055/imu"])
-    ENU_angles, ENU_rot_vel = get_imu_in_body(imu_data,rpy_IMU)     # orientation and angular velocity in body frame
+    imu_data_arr = np.array(imu_data).T #get_array_form(imu_data)
+    ENU_angles, ENU_rot_vel = get_imu_in_body(imu_data_arr,rpy_IMU)     # orientation and angular velocity in body frame
     psi = ENU_angles[:,[0,3]]                                       # heading of the craft in body frame
     r = ENU_rot_vel[:,[0,3]]                                        # angular velocity around local body z-axis
 
@@ -784,7 +789,6 @@ def read_all_data_to_var(file_path,rpy_IMU):
     gps_vel_in_enu = read_in_mcap(file_path, measurement, ["/alpine_amanita/ublox_gps_node/fix_velocity"])
 
     # Reduce IMU data for the transformation of the GPS data
-    imu_data_arr = np.array(imu_data).T #get_array_form(imu_data)
     imu_data_red = synchronize_imu_gps(np.array(gps_fix).T[:,[0,1]], imu_data_arr, 0.009)
 
 
@@ -802,9 +806,9 @@ def read_all_data_to_var(file_path,rpy_IMU):
     
 
     # Motor commands
-    measurement = [['m1'],['m2'],['m3'],['m4']]
-    motors = read_in_mcap(file_path,measurement,['/alpine_amanita/motor_commands'])
-    F_x, F_y, M_z = get_force_and_moment_from_motors(motors, radius)
+    # measurement = [['m1'],['m2'],['m3'],['m4']]
+    # motors = read_in_mcap(file_path,measurement,['/alpine_amanita/motor_commands'])
+    # F_x, F_y, M_z = get_force_and_moment_from_motors(motors, radius)
 
     #new method
     measurement = [['linear', 'x'], ['linear', 'y'], ['linear', 'z'], ['angular', 'x'], ['angular', 'y'], ['angular', 'z']]
@@ -814,14 +818,17 @@ def read_all_data_to_var(file_path,rpy_IMU):
     F_x_new_red = synchronize_input_gps(np.array(gps_fix).T[:,[0,1]], F_x_new)
     F_y_new_red = synchronize_input_gps(np.array(gps_fix).T[:,[0,1]], F_y_new)
     M_z_new_red = synchronize_input_gps(np.array(gps_fix).T[:,[0,1]], M_z_new)
-    F_x_red = synchronize_input_gps(np.array(gps_fix).T[:,[0,1]], F_x) 
-    F_y_red = synchronize_input_gps(np.array(gps_fix).T[:,[0,1]], F_y) 
-    M_z_red = synchronize_input_gps(np.array(gps_fix).T[:,[0,1]], M_z) 
+    # F_x_red = synchronize_input_gps(np.array(gps_fix).T[:,[0,1]], F_x) 
+    # F_y_red = synchronize_input_gps(np.array(gps_fix).T[:,[0,1]], F_y) 
+    # M_z_red = synchronize_input_gps(np.array(gps_fix).T[:,[0,1]], M_z) 
     # plt.plot(M_z[:,0], M_z[:,1])
-    # plt.plot(M_z_new[:,0], M_z_new[:,1])
-    # plt.plot(F_x_new[:,0], F_x_new[:,1])
-    # plt.plot(F_y_new[:,0], F_y_new[:,1])
-
+    # plt.plot(M_z_new_red[:,0], M_z_new_red[:,1])
+    # plt.plot(F_x_new_red[:,0], F_x_new_red[:,1])
+    # plt.plot(F_y_new_red[:,0], F_y_new_red[:,1])
+    # print(F_x_new[1,0])
+    # print(F_x_new_red[1,0])
+    # print(F_x_new.shape)
+    # print(F_x_new_red.shape)
 
     
 
@@ -868,7 +875,7 @@ def read_all_data_to_var(file_path,rpy_IMU):
     # plt.plot(F_x_red[:,0], F_x_red[:,1], color='r')
     # plt.show()
 
-    return x, y, x_dot, y_dot, u_r, v_r, u_r_dot, v_r_dot, psi_red, psi_dot_red, r_red, r_dot_red, F_x_new_red, F_y_new_red, M_z_new_red
+    return x, y, x_dot, y_dot, u_r, v_r, u_r_dot, v_r_dot, psi_red, psi_dot_red, r_red, r_dot_red, F_x_new_red, F_y_new_red, M_z_new_red, np.array(gps_vel_in_enu).T
 
 def do_all(file_path,option,rpy_IMU):
     # x, y, x_dot, y_dot, x_dot_dot, y_dot_dot, u_r, v_r, u_r_dot, v_r_dot, psi, psi_dot, psi_dot_dot, F_x, F_y, M_z = read_all_data_to_var(file_path)
@@ -916,11 +923,11 @@ def dynamics_fossen(x,u,theta,dt):
     # input = np.array([[fx], [fy], [mz]])
 
     X_u_dot = theta[0] 
-    Y_v_dot = theta[0]
-    I_comb = theta[1]
-    X_u = theta[2]
-    Y_v = theta[2]
-    N_r = theta[3]
+    Y_v_dot = theta[1]
+    I_comb = theta[2]
+    X_u = theta[3]
+    Y_v = theta[4]
+    N_r = theta[5]
 
 
     # Mass matrix
@@ -956,9 +963,10 @@ def objective(theta):
 
     prediction_error = 0
     regularization = 0
-    regularization_weight = 0.01
+    regularization_weight = 0.005
+    delta = 1.5 # bigger => more quadratic
     
-    for i in range(len(Jan_state)-1):
+    for i in range(len(state)-1):
         # x_k = Jan_state[i].reshape(-1,1)
         # u_k = Jan_input[i].reshape(-1,1)
         # dt = Jan_dt[i]
@@ -969,8 +977,18 @@ def objective(theta):
         dt = dt_array[i]
         x_k_plus_1_pred = dynamics_fossen(x_k, u_k, theta, dt).reshape(-1,1)
         x_k_plus_1 = state[i+1].reshape(-1,1)
-        current_error = np.linalg.norm(x_k_plus_1 - x_k_plus_1_pred)**2
-        prediction_error += current_error
+
+        # Squared error
+        # current_error = np.linalg.norm(x_k_plus_1 - x_k_plus_1_pred)**2
+
+        # Huber loss
+        residuals = x_k_plus_1 - x_k_plus_1_pred
+        huber = np.sum(np.where(abs(residuals) <= delta, 
+                                0.5 * np.square(residuals),  # Quadratic region
+                                delta * (np.abs(residuals) - 0.5 * delta)  # Linear region
+        ))
+        prediction_error += huber
+
     
     regularization = np.sum(np.square(theta))
     total_error = prediction_error + regularization_weight * regularization
@@ -1044,33 +1062,35 @@ file_path = Path(r"C:\Users\safre\OneDrive - ETH Zurich\ETH\Master\Semesterproje
 # print(coefficient[0][5] / coefficient[0][2])
 
 
-x, y, x_dot, y_dot, u_r, v_r, u_r_dot, v_r_dot, psi, psi_dot, r, r_dot, F_x, F_y, M_z = read_all_data_to_var(file_path,rpy_IMU)
+x, y, x_dot, y_dot, u_r, v_r, u_r_dot, v_r_dot, psi, psi_dot, r, r_dot, F_x, F_y, M_z, GPS_vel = read_all_data_to_var(file_path,rpy_IMU)
 
 Jan_state = np.load(Path(r"C:\Users\safre\Downloads\state_data 1.npy"))
 Jan_state_plus = np.load(Path(r"C:\Users\safre\Downloads\state_new_data.npy"))
 Jan_input = np.load(Path(r"C:\Users\safre\Downloads\control_data.npy"))
 Jan_dt = np.load(Path(r"C:\Users\safre\Downloads\dt_data.npy"))
-fig, axs = plt.subplots(3,1, sharex=True)
-axs[0].plot(np.linspace(0,len(Jan_input[:,0]), len(Jan_input[:,0])), Jan_input[:,0])
-axs[0].plot(np.linspace(0,len(F_x[:,1]), len(F_x[:,1])), F_x[:,1])
-axs[1].plot(np.linspace(0,len(Jan_input[:,1]), len(Jan_input[:,1])), Jan_input[:,1])
-axs[1].plot(np.linspace(0,len(F_y[:,1]), len(F_y[:,1])), F_y[:,1])
-axs[2].plot(np.linspace(0,len(Jan_input[:,2]), len(Jan_input[:,2])), Jan_input[:,2])
-axs[2].plot(np.linspace(0,len(M_z[:,1]), len(M_z[:,1])), M_z[:,1])
-plt.show()
+# fig, axs = plt.subplots(3,1, sharex=True)
+# axs[0].plot(np.linspace(0,len(Jan_input[:,0]), len(Jan_input[:,0])), Jan_input[:,0])
+# axs[0].plot(np.linspace(0,len(F_x[:,1]), len(F_x[:,1])), F_x[:,1])
+# axs[1].plot(np.linspace(0,len(Jan_input[:,1]), len(Jan_input[:,1])), Jan_input[:,1])
+# axs[1].plot(np.linspace(0,len(F_y[:,1]), len(F_y[:,1])), F_y[:,1])
+# axs[2].plot(np.linspace(0,len(Jan_input[:,2]), len(Jan_input[:,2])), Jan_input[:,2])
+# axs[2].plot(np.linspace(0,len(M_z[:,1]), len(M_z[:,1])), M_z[:,1])
+# plt.show()
 
 
-fig, axs = plt.subplots(6,1, sharex=True)
-axs[0].plot(np.linspace(0, len(x[:,1]), len(x[:,1])), x[:,1])
-axs[1].plot(np.linspace(0, len(y[:,1]), len(y[:,1])), y[:,1])
-axs[2].plot(np.linspace(0, len(psi[:,1]), len(psi[:,1])), np.degrees(psi[:,1]))
-axs[3].plot(np.linspace(0, len(u_r[:,1]), len(u_r[:,1])), u_r[:,1])
-axs[3].plot(np.linspace(0, len(Jan_state[:,0]), len(Jan_state[:,0])), Jan_state[:,0])
-axs[4].plot(np.linspace(0, len(v_r[:,1]), len(v_r[:,1])), v_r[:,1])
-axs[4].plot(np.linspace(0, len(Jan_state[:,1]), len(Jan_state[:,1])), Jan_state[:,1])
-axs[5].plot(np.linspace(0, len(r[:,1]), len(r[:,1])), r[:,1])
-axs[5].plot(np.linspace(0, len(Jan_state[:,2]), len(Jan_state[:,2])), Jan_state[:,2])
-plt.show()
+# fig, axs = plt.subplots(6,1, sharex=True)
+# axs[0].plot(np.linspace(0, len(x[:,1]), len(x[:,1])), x[:,1])
+# axs[1].plot(np.linspace(0, len(y[:,1]), len(y[:,1])), y[:,1])
+# axs[2].plot(np.linspace(0, len(psi[:,1]), len(psi[:,1])), np.degrees(psi[:,1]))
+# axs[3].plot(np.linspace(0, len(u_r[:,1]), len(u_r[:,1])), u_r[:,1])
+# # axs[3].plot(np.linspace(0, len(GPS_vel[:,1]), len(GPS_vel[:,1])), GPS_vel[:,1])
+# axs[3].plot(np.linspace(0, len(Jan_state[:,0]), len(Jan_state[:,0])), Jan_state[:,0])
+# axs[4].plot(np.linspace(0, len(v_r[:,1]), len(v_r[:,1])), v_r[:,1])
+# # axs[4].plot(np.linspace(0, len(GPS_vel[:,2]), len(GPS_vel[:,2])), GPS_vel[:,2])
+# axs[4].plot(np.linspace(0, len(Jan_state[:,1]), len(Jan_state[:,1])), Jan_state[:,1])
+# axs[5].plot(np.linspace(0, len(r[:,1]), len(r[:,1])), r[:,1])
+# axs[5].plot(np.linspace(0, len(Jan_state[:,2]), len(Jan_state[:,2])), Jan_state[:,2])
+# plt.show()
 
 
 # print(u_r.shape)
@@ -1078,9 +1098,10 @@ plt.show()
 # print(F_x.shape)
 # print(u_r[0,0])
 # print(r[0,0])
-# print(F_x[0,0])
+# print(F_x[1,0])
+# print(F_x[2,0])
 
-u = np.array([F_x[6:,1], F_y[6:,1], M_z[6:,1]]).T   # zickzack start at 6
+u = np.array([F_x[1:,1], F_y[1:,1], M_z[1:,1]]).T  
 state = np.array([u_r[:,1], v_r[:,1], r[:,1]]).T
 dt_array = np.zeros((len(state[:,0])))
 dt_array[0] = 0.0
@@ -1098,8 +1119,8 @@ for i in range(1,len(dt_array)):
 # plt.show()
 # Bounds = ((-np.inf, 0), (-np.inf, 0), (0.7, np.inf), (-np.inf, 0), (-np.inf, 0), (-np.inf, 1),)
 # x0 = np.array([-30, -30, 0.7, -110, -100, 0.6])
-# x0 = np.array([-1, -1, 0.7, -20, -20, 0.6])
-x0 = np.array([1.0, 0.7, -12.0, -20.0])
+x0 = np.array([-1, -1, 0.7, -20, -20, -20])
+# x0 = np.array([-1.0, 0.7, -12.0, -20.0])
 # x0 = np.array([-30, -30, 0.7, -110, -110, 0.6])
 options = {'xatol': 1e-8, 'maxiter': 2000, 'fatol': 1e-8}
 res = minimize(objective, x0, method='nelder-mead', options=options) 
