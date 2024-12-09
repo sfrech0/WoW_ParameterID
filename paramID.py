@@ -902,6 +902,69 @@ def do_all(file_path,option,rpy_IMU):
 
     return gradient,target
 
+def rot_dyn(x,theta,dt):
+    
+    psi = x[2,0]
+    u_r = x[3,0]
+    v_r = x[4,0]
+
+    R_psi = np.matrix([[np.cos(psi), -np.sin(psi)],
+                       [np.sin(psi),  np.cos(psi)]])
+    
+    A_cont = R_psi 
+
+    A_d = expm(A_cont * dt) 
+    
+    xp = np.squeeze(A_d @ np.array([[u_r], [v_r]]) + np.array([[theta[0]], [theta[1]]]))
+
+    return xp
+
+def fossen_x(x,u,theta,dt):
+    m = 10.835
+    u_r = x[0]
+
+    X_u_dot = theta[0]
+    X_u = theta[1]
+
+    Mass = m + X_u_dot
+
+    Mass_inv = 1/Mass
+
+    N = X_u * u_r
+
+    A_cont = -Mass_inv * N
+    B_cont = Mass_inv
+
+    A_d = expm(A_cont * dt)
+    B_d = 1/A_cont * (A_d - 1) * B_cont
+
+    xp =  A_d * x + B_d * u
+
+    return xp
+
+def fossen_r(x,u,theta,dt):
+    m = 10.835
+    r = x[0]
+
+    I_comb = theta[0]
+    N_r = theta[1]
+
+    Mass = I_comb
+
+    Mass_inv = 1/Mass
+
+    N = N_r * r
+
+    A_cont = -Mass_inv * N
+    B_cont = Mass_inv
+
+    A_d = expm(A_cont * dt)
+    B_d = 1/A_cont * (A_d - 1) * B_cont
+
+    xp =  A_d * x + B_d * u
+
+    return xp
+
 def dynamics_fossen(x,u,theta,dt):
     m = 10.835
     n_states = 3
@@ -923,16 +986,16 @@ def dynamics_fossen(x,u,theta,dt):
     # input = np.array([[fx], [fy], [mz]])
 
     X_u_dot = theta[0] 
-    Y_v_dot = theta[1]
-    I_comb = theta[2]
-    X_u = theta[3]
-    Y_v = theta[4]
-    N_r = theta[5]
+    Y_v_dot = theta[0]
+    I_comb = theta[1]
+    X_u = theta[2]
+    Y_v = theta[2]
+    N_r = theta[3]
 
 
     # Mass matrix
-    Mass_matrix = np.matrix([[m-X_u_dot, 0,         0],
-                             [0,         m-Y_v_dot, 0],
+    Mass_matrix = np.matrix([[m+X_u_dot, 0,         0],
+                             [0,         m+Y_v_dot, 0],
                              [0,         0,         I_comb]],dtype=np.float64)
 
     # Inverse of the mass matrix
@@ -963,8 +1026,8 @@ def objective(theta):
 
     prediction_error = 0
     regularization = 0
-    regularization_weight = 0.005
-    delta = 1.5 # bigger => more quadratic
+    regularization_weight = 0.0
+    delta = 0.5 # bigger => more quadratic
     
     for i in range(len(state)-1):
         # x_k = Jan_state[i].reshape(-1,1)
@@ -973,10 +1036,18 @@ def objective(theta):
         # x_k_plus_1_pred = dynamics_fossen(x_k, u_k, theta, dt).reshape(-1,1)
         # x_k_plus_1 = Jan_state_plus[i].reshape(-1,1)
         x_k = state[i].reshape(-1,1)
+        # x_k = x_k[0] # only u_r
+        # x_k = x_k[2] # only r
         u_k = u[i].reshape(-1,1)
+        # u_k = u_k[0] # only F_x
+        # u_k = u_k[2] # only M_z
         dt = dt_array[i]
         x_k_plus_1_pred = dynamics_fossen(x_k, u_k, theta, dt).reshape(-1,1)
+        # x_k_plus_1_pred = fossen_x(x_k, u_k, theta, dt).reshape(-1,1) # only fossen for velocity in x
+        # x_k_plus_1_pred = fossen_r(x_k, u_k, theta, dt).reshape(-1,1) # only fossen for moment around z
         x_k_plus_1 = state[i+1].reshape(-1,1)
+        # x_k_plus_1 = x_k_plus_1[0,0] # only u_r
+        # x_k_plus_1 = x_k_plus_1[2,0] # only r
 
         # Squared error
         # current_error = np.linalg.norm(x_k_plus_1 - x_k_plus_1_pred)**2
@@ -989,12 +1060,41 @@ def objective(theta):
         ))
         prediction_error += huber
 
-    
+    # Adding a regularization term for penalysing the values of the parameter
     regularization = np.sum(np.square(theta))
     total_error = prediction_error + regularization_weight * regularization
     
     return total_error
 
+def objective_rot(theta):
+
+    prediction_error = 0
+    regularization = 0
+    regularization_weight = 0.01
+    delta = 1.5 # bigger => more quadratic
+
+    for i in range(len(state)-1):
+        x_k = state[i].reshape(-1,1)
+        dt = dt_array[i]
+        x_k_plus_1_pred = rot_dyn(x_k, theta, dt).reshape(-1,1)
+        x_k_plus_1 = state[i+1].reshape(-1,1)
+        x_k_plus_1 = x_k_plus_1[:2,0]
+        # print(x_k_plus_1)
+        
+        # Squared error
+        # current_error = np.linalg.norm(x_k_plus_1 - x_k_plus_1_pred)**2
+
+        # Huber loss
+        residuals = x_k_plus_1 - x_k_plus_1_pred
+        huber = np.sum(np.where(abs(residuals) <= delta, 
+                                0.5 * np.square(residuals),  # Quadratic region
+                                delta * (np.abs(residuals) - 0.5 * delta)  # Linear region
+        ))
+        prediction_error += huber
+
+    total_error = prediction_error
+
+    return total_error
 
 
 # rigid body
@@ -1029,7 +1129,7 @@ m = 10.835 # in kg
 # target = np.vstack([target1,target2,target3,target4,target5,target6])
 
 rpy_IMU = np.array([0.0, 0.0, -np.pi/2]) # bno055 0, 0, -np.pi/2 xsense: np.pi, 0.0, -0.5*np.pi
-file_path = Path(r"C:\Users\safre\OneDrive - ETH Zurich\ETH\Master\Semesterprojekt\Measurements\rosbags_15_11_24_xsense_bno\rosbags_15_11_24_xsense_bno\6.1_zick_zack\rosbag2_2024_11_15-16_08_42_0.mcap")
+file_path = Path(r"C:\Users\safre\OneDrive - ETH Zurich\ETH\Master\Semesterprojekt\Measurements\rosbags_15_11_24_xsense_bno\rosbags_15_11_24_xsense_bno\7.1_random_movement\rosbag2_2024_11_15-16_10_29_0.mcap")
 # gradient, target = do_all(file_path,7,rpy_IMU) 
 
 ################################################################################
@@ -1064,10 +1164,10 @@ file_path = Path(r"C:\Users\safre\OneDrive - ETH Zurich\ETH\Master\Semesterproje
 
 x, y, x_dot, y_dot, u_r, v_r, u_r_dot, v_r_dot, psi, psi_dot, r, r_dot, F_x, F_y, M_z, GPS_vel = read_all_data_to_var(file_path,rpy_IMU)
 
-Jan_state = np.load(Path(r"C:\Users\safre\Downloads\state_data 1.npy"))
-Jan_state_plus = np.load(Path(r"C:\Users\safre\Downloads\state_new_data.npy"))
-Jan_input = np.load(Path(r"C:\Users\safre\Downloads\control_data.npy"))
-Jan_dt = np.load(Path(r"C:\Users\safre\Downloads\dt_data.npy"))
+# Jan_state = np.load(Path(r"C:\Users\safre\Downloads\state_data 1.npy"))
+# Jan_state_plus = np.load(Path(r"C:\Users\safre\Downloads\state_new_data.npy"))
+# Jan_input = np.load(Path(r"C:\Users\safre\Downloads\control_data.npy"))
+# Jan_dt = np.load(Path(r"C:\Users\safre\Downloads\dt_data.npy"))
 # fig, axs = plt.subplots(3,1, sharex=True)
 # axs[0].plot(np.linspace(0,len(Jan_input[:,0]), len(Jan_input[:,0])), Jan_input[:,0])
 # axs[0].plot(np.linspace(0,len(F_x[:,1]), len(F_x[:,1])), F_x[:,1])
@@ -1098,15 +1198,36 @@ Jan_dt = np.load(Path(r"C:\Users\safre\Downloads\dt_data.npy"))
 # print(F_x.shape)
 # print(u_r[0,0])
 # print(r[0,0])
+# print(F_x[0,0])
 # print(F_x[1,0])
-# print(F_x[2,0])
 
-u = np.array([F_x[1:,1], F_y[1:,1], M_z[1:,1]]).T  
+u = np.array([F_x[:,1], F_y[:,1], M_z[:,1]]).T  
 state = np.array([u_r[:,1], v_r[:,1], r[:,1]]).T
 dt_array = np.zeros((len(state[:,0])))
 dt_array[0] = 0.0
 for i in range(1,len(dt_array)):
     dt_array[i] = u_r[i,0] - u_r[i-1,0]
+
+
+
+# print(u_r.shape)
+# print(x.shape)
+# print(psi.shape)
+# print(u_r[50,0])
+# print(x[50,0])
+# print(psi[50,0])
+# print(F_x[1,0])
+
+# fig, axs = plt.subplots(2,1, sharex=True)
+# axs[0].plot(psi[:,0], psi[:,1])
+# axs[1].plot(x[:,0], x[:,1])
+# plt.show()
+
+# state = np.array([x[:,1], y[:,1], psi[:,1], u_r[:,1], v_r[:,1]]).T
+# dt_array = np.zeros((len(state[:,0])))
+# dt_array[0] = 0.0
+# for i in range(1,len(dt_array)):
+#     dt_array[i] = u_r[i,0] - u_r[i-1,0]
 
 
 # target = np.squeeze(target)
@@ -1119,12 +1240,17 @@ for i in range(1,len(dt_array)):
 # plt.show()
 # Bounds = ((-np.inf, 0), (-np.inf, 0), (0.7, np.inf), (-np.inf, 0), (-np.inf, 0), (-np.inf, 1),)
 # x0 = np.array([-30, -30, 0.7, -110, -100, 0.6])
-x0 = np.array([-1, -1, 0.7, -20, -20, -20])
-# x0 = np.array([-1.0, 0.7, -12.0, -20.0])
-# x0 = np.array([-30, -30, 0.7, -110, -110, 0.6])
+# x0 = np.array([1, 1, 0.7, -20, -20, -2])
+x0 = np.array([1.0, 0.7, -70.0, -2.0])
+# x0 = np.array([-1, 0.7]) # only u_r
+# x0 = np.array([0.7, -20]) # only r
 options = {'xatol': 1e-8, 'maxiter': 2000, 'fatol': 1e-8}
 res = minimize(objective, x0, method='nelder-mead', options=options) 
-print(res)
+
+# x0 = np.array([0.0, 0.0])
+# res = minimize(objective_rot, x0, method='nelder-mead', options=options) 
+
+print(res.x)
 
 # print(f"the coefficients are: {coefficient}")
 
